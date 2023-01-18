@@ -19,6 +19,8 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "stdio.h"
+#include "stdlib.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -33,9 +35,8 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define NUM_HOR_MODULE		4 		// number of horizontal modules
-#define NUM_VER_MODULE		1  		// number of vertical modules
-#define SPEED				100		// character running speed (ms)
-#define NUM_CHAR			50		// maximum number of characters
+#define SPEED				500		// character running speed (ms)
+#define NUM_CHAR			100		// maximum number of character
 
 /* USER CODE END PD */
 
@@ -183,10 +184,14 @@ const uint8_t FONT [128][8] = {
 		{0x00,0x14,0x0a,0x00,0x00,0x00,0x00,0x00},   		// U+007E (~)
 		{0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}    		// U+007F
 };
-uint8_t output_arr [NUM_CHAR][8];
+
 uint8_t uart_rx_buf[NUM_CHAR];
+
+uint8_t *output_arr;
+
 uint8_t uart_rx_pointer = 0;
 uint8_t uart_rx = 0;
+uint8_t num_char_out;		//number of characters
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -198,25 +203,26 @@ static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
 void spi_send(uint8_t u8Data);
 void Init(void);
-void Rotate (uint8_t ArrTemp[][(8*NUM_VER_MODULE)]);
-void data_to_module (uint8_t output [][(8*NUM_VER_MODULE)]);
+void Rotate (uint8_t *output);
+void data_to_module (uint8_t *output );
 void Max7219_Config(void);
-void ascii_to_matrix (uint8_t buf[], uint8_t pointer, uint8_t output[][8]);
+void ascii_to_matrix (uint8_t buf[], uint8_t pointer, uint8_t *output);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-void ascii_to_matrix (uint8_t buf[NUM_CHAR], uint8_t pointer, uint8_t output[NUM_CHAR][8]){
+void ascii_to_matrix (uint8_t buf[NUM_CHAR], uint8_t pointer, uint8_t *output){
 	uint8_t i,j;
+	num_char_out = pointer+4;
 	for (i=0; i<4;i++){
 		for (j=0;j<8;j++){
-			output[i][j] = 0x00;
+			*(output_arr+i*8+j) = 0x00;
 		}
 	}
-	for (i=0; i<pointer; i++){
+	for (i=0; i<(pointer+4); i++){
 		for(j = 0; j<8; j++){
-						output[i+4][j] = FONT[buf[i]][j];
-					}
+			*(output_arr+(4+i)*8+j) = FONT[buf[i]][j];
+		}
 	}
 
 }
@@ -226,9 +232,11 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 	if(huart->Instance == huart2.Instance)
 	{
 		if (uart_rx =='\n'){
-			for (i=0; i<NUM_CHAR; i++){
+			free(output_arr);
+			output_arr = (uint8_t *)malloc((uart_rx_pointer+4)*8*sizeof(uint8_t));
+			for (i=0; i<(4+uart_rx_pointer); i++){
 				for (j=0; j<8; j++){
-					output_arr[i][j] = 0;
+					*(output_arr+i*8+j) = 0;
 				}
 			}
 			ascii_to_matrix (uart_rx_buf, uart_rx_pointer,  output_arr);
@@ -244,44 +252,44 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 	}
 }
 // push data to module
-void data_to_module (uint8_t output [][(8*NUM_VER_MODULE)]){
+void data_to_module (uint8_t *output ){
 	uint32_t i;
 	int32_t j;
 	uint8_t addr;
-	for (i = 0; i<(8*NUM_VER_MODULE); i++){
+	for (i = 0; i<8; i++){
 				for (j = NUM_HOR_MODULE-1; j >= 0; j--){
 					addr = i+1;
 					HAL_SPI_Transmit_DMA(&hspi2, &addr, 1);
-					HAL_SPI_Transmit_DMA(&hspi2, &output[j][7-i], 1);
+					HAL_SPI_Transmit_DMA(&hspi2, (output + j*8 +(7-i)), 1);
 				}
 				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, 1);
 				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, 0);
 			}
 
 }
-// ham xoay bit sang phai
-void Rotate (uint8_t ArrTemp[][(8*NUM_VER_MODULE)]){
+// rotate the bit to the right
+void Rotate (uint8_t *output){
 	uint32_t i, j;
-	uint8_t smark [NUM_CHAR];
+	uint8_t smark [num_char_out];
 
-	for (j=0; j<(8*NUM_VER_MODULE); j++){
-		smark[0] = ArrTemp[0][j] & 0x01;
+	for (j=0; j<8; j++){
+		smark[0] = *(output + j) & 0x01;
 		smark[0] = smark[0] << 07;
 
-		smark[NUM_CHAR-1] = ArrTemp[NUM_CHAR-1][j] & 0x01;
-		smark[NUM_CHAR-1] = smark[NUM_CHAR-1] << 07;
-		ArrTemp[NUM_CHAR-1][j] = ArrTemp[NUM_CHAR-1][j] >> 1;
-		ArrTemp[NUM_CHAR-1][j] |= smark[0];
+		smark[num_char_out-1] = *(output + 8*(num_char_out-1)+j) & 0x01;
+		smark[num_char_out-1] = smark[num_char_out-1] << 07;
+		*(output + 8*(num_char_out-1)+j) = *(output + 8*(num_char_out-1)+j) >> 1;
+		*(output + 8*(num_char_out-1)+j) |= smark[0];
 
-		for (i = NUM_CHAR-2; i>0; i--){
-			smark[i] = ArrTemp[i][j] & 0x01;
+		for (i = num_char_out-2; i>0; i--){
+			smark[i] = *(output + 8*i+j) & 0x01;
 			smark[i] = smark[i] << 07;
-			ArrTemp[i][j] = ArrTemp[i][j] >> 1;
-			ArrTemp[i][j] |= smark[i+1];
+			*(output + 8*i+j)= *(output + 8*i+j) >> 1;
+			*(output + 8*i+j) |= smark[i+1];
 		}
 
-		ArrTemp[0][j] = ArrTemp[0][j] >> 1;
-		ArrTemp[0][j] |= smark[1];
+		*(output+j) = *(output+j) >> 1;
+		*(output+j) |= smark[1];
 	}
 }
 void Max7219_Config(void){
@@ -374,7 +382,7 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 
-	  if (HAL_GetTick()-timer >= SPEED){
+	  if ((HAL_GetTick()-timer >= SPEED)&&(output_arr != NULL)&&(num_char_out != 0)){
 		  HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
 		  Rotate (output_arr);
 		  data_to_module(output_arr);
