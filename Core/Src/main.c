@@ -19,12 +19,11 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "stdio.h"
-#include "stdlib.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "stdio.h"
+#include "stdlib.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -35,8 +34,60 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define NUM_HOR_MODULE		4 		// number of horizontal modules
-#define SPEED				500		// character running speed (ms)
+#define SPEED				80		// character running speed (ms)
 #define NUM_CHAR			100		// maximum number of character
+// Max7219's registers address
+#define MAX7219_REG_ADD_DECODEMODE		0x09
+#define MAX7219_REG_ADD_INTENSITY		0x0A
+#define MAX7219_REG_ADD_SCANLIMIT		0x0B
+#define MAX7219_REG_ADD_SHUTDOWN		0x0C
+#define MAX7219_REG_ADD_DISPLAYTEST		0x0F
+
+// Shutdown register's value
+#define MAX7219_SHUTDOWN_MODE			0x00
+#define MAX7219_NO_SHUTDOWN_MODE		0x01
+
+// Decode-mode register's value
+// what digits will be decoded
+#define MAX7219_NO_DECODE				0x00
+#define MAX7219_DECODE_DIGIT_0			0x01
+#define MAX7219_DECODE_DIGIT_3_0		0x0F
+#define MAX7219_DECODE_ALL_DIGIT		0xFF
+
+// Intensity register's value
+// Level of intensity
+#define MAX7219_INTENSITY_1_32			0x00
+#define MAX7219_INTENSITY_3_32			0x01
+#define MAX7219_INTENSITY_5_32			0x02
+#define MAX7219_INTENSITY_7_32			0x03
+#define MAX7219_INTENSITY_9_32			0x04
+#define MAX7219_INTENSITY_11_32			0x05
+#define MAX7219_INTENSITY_13_32			0x06
+#define MAX7219_INTENSITY_15_32			0x07
+#define MAX7219_INTENSITY_17_32			0x08
+#define MAX7219_INTENSITY_19_32			0x09
+#define MAX7219_INTENSITY_21_32			0x0A
+#define MAX7219_INTENSITY_23_32			0x0B
+#define MAX7219_INTENSITY_25_32			0x0C
+#define MAX7219_INTENSITY_27_32			0x0D
+#define MAX7219_INTENSITY_29_32			0x0E
+#define MAX7219_INTENSITY_31_32			0x0F
+
+// Scan-limit register's value
+// Number of displayed digit, start from digit 0
+#define MAX7219_DISPLAY_1_DIGIT			0x00
+#define MAX7219_DISPLAY_2_DIGIT			0x01
+#define MAX7219_DISPLAY_3_DIGIT			0x02
+#define MAX7219_DISPLAY_4_DIGIT			0x03
+#define MAX7219_DISPLAY_5_DIGIT			0x04
+#define MAX7219_DISPLAY_6_DIGIT			0x05
+#define MAX7219_DISPLAY_7_DIGIT			0x06
+#define MAX7219_DISPLAY_8_DIGIT			0x07
+
+// Display-test register's value
+#define MAX7219_DISPLAY_NORMAL			0x00
+#define MAX7219_DISPLAY_TEST			0x01
+
 
 /* USER CODE END PD */
 
@@ -186,9 +237,7 @@ const uint8_t FONT [128][8] = {
 };
 
 uint8_t uart_rx_buf[NUM_CHAR];
-
 uint8_t *output_arr;
-
 uint8_t uart_rx_pointer = 0;
 uint8_t uart_rx = 0;
 uint8_t num_char_out;		//number of characters
@@ -201,31 +250,23 @@ static void MX_DMA_Init(void);
 static void MX_SPI2_Init(void);
 static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
-void spi_send(uint8_t u8Data);
-void Init(void);
-void Rotate (uint8_t *output);
+void rotate (uint8_t *output);
 void data_to_module (uint8_t *output );
-void Max7219_Config(void);
+void init_max7219(void);
 void ascii_to_matrix (uint8_t buf[], uint8_t pointer, uint8_t *output);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-void ascii_to_matrix (uint8_t buf[NUM_CHAR], uint8_t pointer, uint8_t *output){
-	uint8_t i,j;
-	num_char_out = pointer+4;
-	for (i=0; i<4;i++){
-		for (j=0;j<8;j++){
-			*(output_arr+i*8+j) = 0x00;
-		}
+void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi)
+{
+	if(hspi->Instance == hspi2.Instance)
+	{
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, 1);
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, 0);
 	}
-	for (i=0; i<(pointer+4); i++){
-		for(j = 0; j<8; j++){
-			*(output_arr+(4+i)*8+j) = FONT[buf[i]][j];
-		}
-	}
-
 }
+
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
 	uint8_t i,j;
@@ -251,24 +292,38 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 		HAL_UART_Receive_DMA(&huart2, &uart_rx, 1);
 	}
 }
+void ascii_to_matrix (uint8_t buf[NUM_CHAR], uint8_t pointer, uint8_t *output){
+	uint8_t i,j;
+	num_char_out = pointer+4;
+	for (i=0; i<4;i++){
+		for (j=0;j<8;j++){
+			*(output_arr+i*8+j) = 0x00;
+		}
+	}
+	for (i=0; i<(pointer+4); i++){
+		for(j = 0; j<8; j++){
+			*(output_arr+(4+i)*8+j) = FONT[buf[i]][j];
+		}
+	}
+
+}
 // push data to module
 void data_to_module (uint8_t *output ){
 	uint32_t i;
 	int32_t j;
-	uint8_t addr;
 	for (i = 0; i<8; i++){
-				for (j = NUM_HOR_MODULE-1; j >= 0; j--){
-					addr = i+1;
-					HAL_SPI_Transmit_DMA(&hspi2, &addr, 1);
-					HAL_SPI_Transmit_DMA(&hspi2, (output + j*8 +(7-i)), 1);
-				}
-				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, 1);
-				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, 0);
-			}
+		uint8_t temp_data[2*NUM_HOR_MODULE];
+		for(j = 0; j< NUM_HOR_MODULE;j++){
+			temp_data[2*j] = i+1;
+			temp_data[2*j+1] = *(output + (NUM_HOR_MODULE-j-1)*8 +(7-i));
+			HAL_SPI_Transmit_DMA(&hspi2, temp_data, 2*NUM_HOR_MODULE);
+		}
+
+	}
 
 }
 // rotate the bit to the right
-void Rotate (uint8_t *output){
+void rotate (uint8_t *output){
 	uint32_t i, j;
 	uint8_t smark [num_char_out];
 
@@ -292,48 +347,28 @@ void Rotate (uint8_t *output){
 		*(output+j) |= smark[1];
 	}
 }
-void Max7219_Config(void){
-	uint8_t decode_mode = 0x09;
-	uint8_t intensity = 0x0A;
-	uint8_t scan_limit = 0x0B;
-	uint8_t shut_down = 0x0C;
-	uint8_t display_test = 0x0F;
-	uint8_t mode_0 = 0x00;
-	uint8_t mode_1 = 0x03;
-	uint8_t mode_2 = 0x07;
-	uint8_t mode_3 = 0x01;
+void init_max7219(void){
 	uint8_t i;
 	for (i = 0; i < NUM_HOR_MODULE; i++){
-		HAL_SPI_Transmit_DMA( &hspi2, &decode_mode, 1);
-		HAL_SPI_Transmit_DMA( &hspi2,&mode_0, 1);
+			uint8_t temp_data[2] = {MAX7219_REG_ADD_DECODEMODE, MAX7219_NO_DECODE};
+			HAL_SPI_Transmit_DMA(&hspi2, temp_data, 2);
 	}
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, 1);
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, 0);
 	for (i = 0; i < NUM_HOR_MODULE; i++){
-		HAL_SPI_Transmit_DMA( &hspi2, &intensity, 1);
-		HAL_SPI_Transmit_DMA( &hspi2,&mode_1, 1);
-		}
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, 1);
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, 0);
+			uint8_t temp_data[2] = {MAX7219_REG_ADD_INTENSITY, MAX7219_INTENSITY_7_32};
+			HAL_SPI_Transmit_DMA(&hspi2, temp_data, 2);
+	}
 	for (i = 0; i < NUM_HOR_MODULE; i++){
-		HAL_SPI_Transmit_DMA( &hspi2, &scan_limit, 1);
-		HAL_SPI_Transmit_DMA( &hspi2,&mode_2, 1);
-			}
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, 1);
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, 0);
+			uint8_t temp_data[2] = {MAX7219_REG_ADD_SCANLIMIT, MAX7219_DISPLAY_8_DIGIT};
+			HAL_SPI_Transmit_DMA(&hspi2, temp_data, 2);
+	}
 	for (i = 0; i < NUM_HOR_MODULE; i++){
-		HAL_SPI_Transmit_DMA( &hspi2, &shut_down, 1);
-		HAL_SPI_Transmit_DMA( &hspi2,&mode_3, 1);
-				}
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, 1);
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, 0);
+			uint8_t temp_data[2] = {MAX7219_REG_ADD_SHUTDOWN, MAX7219_NO_SHUTDOWN_MODE};
+			HAL_SPI_Transmit_DMA(&hspi2, temp_data, 2);
+	}
 	for (i = 0; i < NUM_HOR_MODULE; i++){
-		HAL_SPI_Transmit_DMA( &hspi2, &display_test,1);
-		HAL_SPI_Transmit_DMA( &hspi2,&mode_0, 1);
-					}
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, 1);
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, 0);
-
+			uint8_t temp_data[2] = {MAX7219_REG_ADD_DISPLAYTEST, MAX7219_DISPLAY_NORMAL};
+			HAL_SPI_Transmit_DMA(&hspi2, temp_data, 2);
+	}
 }
 /* USER CODE END 0 */
 
@@ -370,7 +405,7 @@ int main(void)
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
   uint32_t timer = 0;
-  Max7219_Config();
+  init_max7219();
   HAL_UART_Receive_DMA(&huart2, &uart_rx, 1);
   /* USER CODE END 2 */
 
@@ -383,8 +418,7 @@ int main(void)
     /* USER CODE BEGIN 3 */
 
 	  if ((HAL_GetTick()-timer >= SPEED)&&(output_arr != NULL)&&(num_char_out != 0)){
-		  HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
-		  Rotate (output_arr);
+		  rotate (output_arr);
 		  data_to_module(output_arr);
 		  timer=HAL_GetTick();
 	  }
